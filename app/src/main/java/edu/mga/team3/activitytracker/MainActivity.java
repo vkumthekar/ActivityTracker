@@ -1,19 +1,26 @@
 package edu.mga.team3.activitytracker;
 
-import android.Manifest;
-import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.content.IntentSender;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
-import android.support.v4.app.ActivityCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
-import android.widget.EditText;
+import android.view.View;
+import android.widget.TextView;
 
-import com.google.android.gms.auth.api.signin.GoogleSignIn;
+import com.android.volley.Request;
+import com.android.volley.RequestQueue;
+import com.android.volley.Response;
+import com.android.volley.VolleyError;
+import com.android.volley.toolbox.StringRequest;
+import com.android.volley.toolbox.Volley;
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.Scopes;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.api.ResultCallback;
+import com.google.android.gms.common.api.Scope;
+import com.google.android.gms.common.api.Status;
 import com.google.android.gms.fitness.Fitness;
-import com.google.android.gms.fitness.FitnessOptions;
 import com.google.android.gms.fitness.data.DataPoint;
 import com.google.android.gms.fitness.data.DataSource;
 import com.google.android.gms.fitness.data.DataType;
@@ -22,145 +29,180 @@ import com.google.android.gms.fitness.data.Value;
 import com.google.android.gms.fitness.request.DataSourcesRequest;
 import com.google.android.gms.fitness.request.OnDataPointListener;
 import com.google.android.gms.fitness.request.SensorRequest;
-import com.google.android.gms.tasks.OnCompleteListener;
-import com.google.android.gms.tasks.OnFailureListener;
-import com.google.android.gms.tasks.OnSuccessListener;
-import com.google.android.gms.tasks.Task;
+import com.google.android.gms.fitness.result.DataSourcesResult;
 
-import java.util.List;
+import java.util.Calendar;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements OnDataPointListener,
+        GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener {
     private static final String TAG = "MainActivity";
-    private OnDataPointListener mListener;
-    private FitnessOptions fitnessOptions;
-    private static final int GOOGLE_FIT_PERMISSIONS_REQUEST_CODE = 34;
-    private EditText stepsText = (EditText) findViewById(R.id.editText);
+    private static final int REQUEST_OAUTH = 1;
+    private static final String AUTH_PENDING = "auth_state_pending";
+    private boolean authInProgress = false;
+    private GoogleApiClient mApiClient;
+    private TextView steps;
+    private TextView until;
+
+
+    RequestQueue queue ;  // this = context
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-        requestkSelfPermission();
-        if (hasOAuthPermission()) {
-            Log.i(TAG, "User is authenticated, accessing sensor");
-            accessGoogleFit();
+        steps = (TextView) findViewById(R.id.steps);
+        until = (TextView) findViewById(R.id.untilTime);
+        if (savedInstanceState != null) {
+            authInProgress = savedInstanceState.getBoolean(AUTH_PENDING);
+        }
+        steps.setText("10");
+        until.setText(Calendar.getInstance().getTime().toString());
+        mApiClient = new GoogleApiClient.Builder(this)
+                .addApi(Fitness.SENSORS_API)
+                .addScope(new Scope(Scopes.FITNESS_ACTIVITY_READ_WRITE))
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .build();
+        queue = Volley.newRequestQueue(this);
+    }
+
+    public void onStatsButtonClick(View view) {
+        Intent intent = new Intent(this, Stats.class);
+        startActivity(intent);
+    }
+    @Override
+    public void onConnected(Bundle bundle) {
+        DataSourcesRequest dataSourceRequest = new DataSourcesRequest.Builder()
+                .setDataTypes( DataType.TYPE_STEP_COUNT_CUMULATIVE )
+                .setDataSourceTypes( DataSource.TYPE_RAW )
+                .build();
+
+        ResultCallback<DataSourcesResult> dataSourcesResultCallback = new ResultCallback<DataSourcesResult>() {
+            @Override
+            public void onResult(DataSourcesResult dataSourcesResult) {
+                for( DataSource dataSource : dataSourcesResult.getDataSources() ) {
+                    if( DataType.TYPE_STEP_COUNT_CUMULATIVE.equals( dataSource.getDataType() ) ) {
+                        registerFitnessDataListener(dataSource, DataType.TYPE_STEP_COUNT_CUMULATIVE);
+                    }
+                }
+            }
+        };
+
+        Fitness.SensorsApi.findDataSources(mApiClient, dataSourceRequest)
+                .setResultCallback(dataSourcesResultCallback);
+    }
+    private void registerFitnessDataListener(DataSource dataSource, DataType dataType) {
+    Log.e(TAG, "registerFitnessDataListener");
+        SensorRequest request = new SensorRequest.Builder()
+                .setDataSource( dataSource )
+                .setDataType( dataType )
+                .setSamplingRate( 3, TimeUnit.SECONDS )
+                .build();
+
+        Fitness.SensorsApi.add( mApiClient, request, this )
+                .setResultCallback(new ResultCallback<Status>() {
+                    @Override
+                    public void onResult(Status status) {
+                        if (status.isSuccess()) {
+                            Log.e( "GoogleFit", "SensorApi successfully added" );
+                        }
+                    }
+                });
+    }
+    @Override
+    public void onConnectionSuspended(int i) {
+
+    }
+
+    @Override
+    public void onConnectionFailed(ConnectionResult connectionResult) {
+        if( !authInProgress ) {
+            try {
+                authInProgress = true;
+                connectionResult.startResolutionForResult( MainActivity.this, REQUEST_OAUTH );
+            } catch(IntentSender.SendIntentException e ) {
+
+            }
+        } else {
+            Log.e( "GoogleFit", "authInProgress" );
+        }
+    }
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if( requestCode == REQUEST_OAUTH ) {
+            authInProgress = false;
+            if( resultCode == RESULT_OK ) {
+                if( !mApiClient.isConnecting() && !mApiClient.isConnected() ) {
+                    mApiClient.connect();
+                }
+            } else if( resultCode == RESULT_CANCELED ) {
+                Log.e( "GoogleFit", "RESULT_CANCELED" );
+            }
+        } else {
+            Log.e("GoogleFit", "requestCode NOT request_oauth");
+        }
+    }
+    @Override
+    public void onDataPoint(DataPoint dataPoint) {
+        for( final Field field : dataPoint.getDataType().getFields() ) {
+            final Value value = dataPoint.getValue( field );
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    //Toast.makeText(getApplicationContext(), "Field: " + field.getName() + " Value: " + value, Toast.LENGTH_SHORT).show();
+                    //Date currentTime = Calendar.getInstance().getTime();
+                    String recordedSteps = value.toString();
+                    String time = Calendar.getInstance().getTime().toString();
+                    steps.setText(recordedSteps);
+                    //steps.setText("10");
+                    until.setText(time);
+                    Log.e(TAG, "Registering steps " + recordedSteps + " for " + time);
+                    //registerSteps(recordedSteps, time);
+                }
+            });
         }
     }
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (resultCode == Activity.RESULT_OK) {
-            if (requestCode == GOOGLE_FIT_PERMISSIONS_REQUEST_CODE) {
-                accessGoogleFit();
-            }
-        }
+    protected void onStart() {
+        super.onStart();
+        mApiClient.connect();
     }
 
-    private void accessGoogleFit() {
-
-
-
-        Fitness.getSensorsClient(this, GoogleSignIn.getLastSignedInAccount(this))
-                .findDataSources(
-                        new DataSourcesRequest.Builder()
-                                .setDataTypes(DataType.TYPE_LOCATION_SAMPLE)
-                                .setDataSourceTypes(DataSource.TYPE_RAW)
-                                .build())
-                .addOnSuccessListener(
-                        new OnSuccessListener<List<DataSource>>() {
-                            @Override
-                            public void onSuccess(List<DataSource> dataSources) {
-                                for (DataSource dataSource : dataSources) {
-                                    Log.i(TAG, "Data source found: " + dataSource.toString());
-                                    Log.i(TAG, "Data Source type: " + dataSource.getDataType().getName());
-
-                                    // Let's register a listener to receive Activity data!
-                                    if (dataSource.getDataType().equals(DataType.TYPE_LOCATION_SAMPLE)
-                                            && mListener == null) {
-                                        Log.i(TAG, "Data source for LOCATION_SAMPLE found!  Registering.");
-                                        registerFitnessDataListener(dataSource, DataType.TYPE_LOCATION_SAMPLE);
-                                    }
-                                }
-                            }
-                        })
-                .addOnFailureListener(
-                        new OnFailureListener() {
-                            @Override
-                            public void onFailure(@NonNull Exception e) {
-                                Log.e(TAG, "failed", e);
-                            }
-                        });
-    }
-
-    private void requestRuntimePermissions() {
-
-    }
-
-    private void registerFitnessDataListener(DataSource dataSource, DataType dataType) {
-
-        mListener =
-                new OnDataPointListener() {
+    public void registerSteps(String steps, String date) {
+        Log.d(TAG, "registerSteps");
+        String url = "https://fresh-metrics-246800.appspot.com/activity/";
+        final Map<String, String>  params = new HashMap<String, String>();
+        params.put("steps", steps);
+        params.put("untilTime", date);
+        StringRequest postRequest = new StringRequest(Request.Method.POST, url,
+                new Response.Listener<String>()
+                {
                     @Override
-                    public void onDataPoint(DataPoint dataPoint) {
-                        for (Field field : dataPoint.getDataType().getFields()) {
-                            Value val = dataPoint.getValue(field);
-                            Log.i(TAG, "Detected DataPoint field: " + field.getName());
-                            Log.i(TAG, "Detected DataPoint value: " + val);
-                            stepsText.setText(val.toString());
-                        }
+                    public void onResponse(String response) {
+                        // response
+                        Log.d("Response", response);
                     }
-                };
-
-        Fitness.getSensorsClient(this, GoogleSignIn.getLastSignedInAccount(this))
-                .add(
-                        new SensorRequest.Builder()
-                                .setDataSource(dataSource) // Optional but recommended for custom data sets.
-                                .setDataType(dataType) // Can't be omitted.
-                                .setSamplingRate(10, TimeUnit.SECONDS)
-                                .build(),
-                        mListener)
-                .addOnCompleteListener(
-                        new OnCompleteListener<Void>() {
-                            @Override
-                            public void onComplete(@NonNull Task<Void> task) {
-                                if (task.isSuccessful()) {
-                                    Log.i(TAG, "Listener registered!");
-                                } else {
-                                    Log.e(TAG, "Listener not registered.", task.getException());
-                                }
-                            }
-                        });
-    }
-
-    private void requestkSelfPermission() {
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            // Check Permissions Now
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                    GOOGLE_FIT_PERMISSIONS_REQUEST_CODE);
-            Log.i(TAG, "Permissions requested!");
-
-        } else {
-            Log.i(TAG, "Permissions granted already.");
-        }
-    }
-
-    /**
-     * Gets the {@link FitnessOptions} in order to check or request OAuth permission for the user.
-     */
-    private FitnessOptions getFitnessSignInOptions() {
-        return fitnessOptions = FitnessOptions.builder()
-                .addDataType(DataType.TYPE_STEP_COUNT_CUMULATIVE, FitnessOptions.ACCESS_READ)
-                //.addDataType(DataType.AGGREGATE_STEP_COUNT_DELTA, FitnessOptions.ACCESS_READ)
-                .build();
-    }
-
-    /**
-     * Checks if user's account has OAuth permission to Fitness API.
-     */
-    private boolean hasOAuthPermission() {
-        FitnessOptions fitnessOptions = getFitnessSignInOptions();
-        return GoogleSignIn.hasPermissions(GoogleSignIn.getLastSignedInAccount(this), fitnessOptions);
+                },
+                new Response.ErrorListener()
+                {
+                    @Override
+                    public void onErrorResponse(VolleyError error) {
+                        // error
+                        Log.d("Error.Response", error.getMessage());
+                    }
+                }
+        ) {
+            @Override
+            protected Map<String, String> getParams()
+            {
+                return params;
+            }
+        };
+        queue.add(postRequest);
     }
 }
