@@ -8,11 +8,13 @@ import android.util.Log;
 import android.view.View;
 import android.widget.TextView;
 
+import com.android.volley.AuthFailureError;
 import com.android.volley.Request;
 import com.android.volley.RequestQueue;
 import com.android.volley.Response;
 import com.android.volley.VolleyError;
-import com.android.volley.toolbox.StringRequest;
+import com.android.volley.VolleyLog;
+import com.android.volley.toolbox.JsonObjectRequest;
 import com.android.volley.toolbox.Volley;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.Scopes;
@@ -31,7 +33,12 @@ import com.google.android.gms.fitness.request.OnDataPointListener;
 import com.google.android.gms.fitness.request.SensorRequest;
 import com.google.android.gms.fitness.result.DataSourcesResult;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.text.SimpleDateFormat;
 import java.util.Calendar;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -45,9 +52,10 @@ public class MainActivity extends AppCompatActivity implements OnDataPointListen
     private boolean authInProgress = false;
     private GoogleApiClient mApiClient;
     private TextView steps;
-    private TextView until;
-
-
+    private TextView todayUntilNow;
+    String liveSteps = "0";
+    String todaysSteps = "0";
+    int today = Calendar.getInstance().get(Calendar.DAY_OF_YEAR);
     RequestQueue queue ;  // this = context
 
     @Override
@@ -55,12 +63,12 @@ public class MainActivity extends AppCompatActivity implements OnDataPointListen
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         steps = (TextView) findViewById(R.id.steps);
-        until = (TextView) findViewById(R.id.untilTime);
+        todayUntilNow = (TextView) findViewById(R.id.untilTime);
         if (savedInstanceState != null) {
             authInProgress = savedInstanceState.getBoolean(AUTH_PENDING);
         }
-        steps.setText("10");
-        until.setText(Calendar.getInstance().getTime().toString());
+        steps.setText("0");
+        todayUntilNow.setText("0");
         mApiClient = new GoogleApiClient.Builder(this)
                 .addApi(Fitness.SENSORS_API)
                 .addScope(new Scope(Scopes.FITNESS_ACTIVITY_READ_WRITE))
@@ -68,12 +76,41 @@ public class MainActivity extends AppCompatActivity implements OnDataPointListen
                 .addOnConnectionFailedListener(this)
                 .build();
         queue = Volley.newRequestQueue(this);
+        liveSteps = "0";
     }
 
     public void onStatsButtonClick(View view) {
         Intent intent = new Intent(this, Stats.class);
         startActivity(intent);
     }
+    @Override
+    public void onConnected(Bundle bundle) {
+        DataSourcesRequest dataSourceRequest = new DataSourcesRequest.Builder()
+            .setDataTypes(DataType.TYPE_STEP_COUNT_DELTA, DataType.TYPE_STEP_COUNT_CUMULATIVE)
+            .setDataSourceTypes( DataSource.TYPE_DERIVED)
+            .build();
+
+    ResultCallback<DataSourcesResult> dataSourcesResultCallback = new ResultCallback<DataSourcesResult>() {
+        @Override
+        public void onResult(DataSourcesResult dataSourcesResult) {
+            for (DataSource dataSource : dataSourcesResult.getDataSources()) {
+                DataType type = dataSource.getDataType();
+
+                if (DataType.TYPE_STEP_COUNT_DELTA.equals(type)
+                        || DataType.TYPE_STEP_COUNT_CUMULATIVE.equals(type)) {
+                    Log.i(TAG, "Register Fitness Listener: " + type);
+                    registerFitnessDataListener(dataSource, type);//DataType.TYPE_STEP_COUNT_DELTA);
+                }
+            }
+        }
+    };
+
+        Fitness.SensorsApi.findDataSources(mApiClient, dataSourceRequest)
+            .setResultCallback(dataSourcesResultCallback);
+
+    }
+
+    /*//Working
     @Override
     public void onConnected(Bundle bundle) {
         DataSourcesRequest dataSourceRequest = new DataSourcesRequest.Builder()
@@ -94,7 +131,8 @@ public class MainActivity extends AppCompatActivity implements OnDataPointListen
 
         Fitness.SensorsApi.findDataSources(mApiClient, dataSourceRequest)
                 .setResultCallback(dataSourcesResultCallback);
-    }
+    }*/
+
     private void registerFitnessDataListener(DataSource dataSource, DataType dataType) {
     Log.e(TAG, "registerFitnessDataListener");
         SensorRequest request = new SensorRequest.Builder()
@@ -154,14 +192,21 @@ public class MainActivity extends AppCompatActivity implements OnDataPointListen
                 @Override
                 public void run() {
                     //Toast.makeText(getApplicationContext(), "Field: " + field.getName() + " Value: " + value, Toast.LENGTH_SHORT).show();
-                    //Date currentTime = Calendar.getInstance().getTime();
+                    SimpleDateFormat dateFormat = new SimpleDateFormat("MM-dd-yyyy HH:mm");
+                    Date currentTime = Calendar.getInstance().getTime();
                     String recordedSteps = value.toString();
-                    String time = Calendar.getInstance().getTime().toString();
-                    steps.setText(recordedSteps);
+                    liveSteps = String.valueOf(Integer.parseInt(liveSteps) +  Integer.parseInt(recordedSteps));
+                    if(today == Calendar.getInstance().get(Calendar.DAY_OF_YEAR)) {
+                        todaysSteps = String.valueOf(Integer.parseInt(recordedSteps) +  Integer.parseInt(todaysSteps));
+                    } else {
+                        todaysSteps = "0";
+                    }
+                    String time = dateFormat.format(currentTime);
+                    steps.setText(liveSteps);
                     //steps.setText("10");
-                    until.setText(time);
+                    todayUntilNow.setText(todaysSteps);
                     Log.e(TAG, "Registering steps " + recordedSteps + " for " + time);
-                    //registerSteps(recordedSteps, time);
+                    registerSteps(recordedSteps, time);
                 }
             });
         }
@@ -176,33 +221,41 @@ public class MainActivity extends AppCompatActivity implements OnDataPointListen
     public void registerSteps(String steps, String date) {
         Log.d(TAG, "registerSteps");
         String url = "https://fresh-metrics-246800.appspot.com/activity/";
-        final Map<String, String>  params = new HashMap<String, String>();
-        params.put("steps", steps);
-        params.put("untilTime", date);
-        StringRequest postRequest = new StringRequest(Request.Method.POST, url,
-                new Response.Listener<String>()
-                {
+        // Optional Parameters to pass as POST request
+        JSONObject js = new JSONObject();
+        try {
+            js.put("steps",steps);
+            js.put("untilTime",date);
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+
+        // Make request for JSONObject
+        JsonObjectRequest jsonObjReq = new JsonObjectRequest(
+                Request.Method.POST, url, js,
+                new Response.Listener<JSONObject>() {
                     @Override
-                    public void onResponse(String response) {
-                        // response
-                        Log.d("Response", response);
+                    public void onResponse(JSONObject response) {
+                        Log.d(TAG, response.toString() + " Hurrey!!! Registered...");
                     }
-                },
-                new Response.ErrorListener()
-                {
-                    @Override
-                    public void onErrorResponse(VolleyError error) {
-                        // error
-                        Log.d("Error.Response", error.getMessage());
-                    }
-                }
-        ) {
+                }, new Response.ErrorListener() {
             @Override
-            protected Map<String, String> getParams()
-            {
-                return params;
+            public void onErrorResponse(VolleyError error) {
+                VolleyLog.d(TAG, "Error: " + error.getMessage());
             }
+        }) {
+
+            /**
+             * Passing some request headers
+             */
+            @Override
+            public Map<String, String> getHeaders() throws AuthFailureError {
+                HashMap<String, String> headers = new HashMap<String, String>();
+                headers.put("Content-Type", "application/json; charset=utf-8");
+                return headers;
+            }
+
         };
-        queue.add(postRequest);
+        queue.add(jsonObjReq);
     }
 }
