@@ -28,12 +28,12 @@ public class Stats extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_stats);
-        //getActivities("DAILY");
         graph = (GraphView) findViewById(R.id.graph);
         graph.getSeries().clear();
         GridLabelRenderer gridLabel = graph.getGridLabelRenderer();
         gridLabel.setHorizontalAxisTitle("");
         gridLabel.setVerticalAxisTitle("");
+        //getActivities("DAILY");
     }
 
     public void showDailyActivities(View view) {
@@ -61,6 +61,11 @@ public class Stats extends AppCompatActivity {
 
                             graph = (GraphView) findViewById(R.id.graph);
                             graph.clearAnimation();
+                            graph.removeAllSeries();
+                            int maxX = 0;
+                            int minX = 0;
+                            int minY = 0;
+                            int maxY = 0;
                             LineGraphSeries<DataPoint> series = new LineGraphSeries<>();
                             String statOf = null;
                             // Display the first 500 characters of the response string.
@@ -77,15 +82,31 @@ public class Stats extends AppCompatActivity {
                                 Log.i("Stats", "timeOfYear " + stat.get("key").toString());
                                 if(statOf == null) // Set only if not found earlier
                                     statOf = stat.get("key").toString().split(" ")[0]; // DAY /WEEK /MONTH
+
+                                switch (statOf) {
+                                    case "DAY":
+                                        maxX = 210;
+                                        minX = 150;
+                                        break;
+                                    case "WEEK":
+                                        maxX = 31;
+                                        minX = 21;
+                                        break;
+                                    case "MONTH":
+                                        maxX = 8;
+                                        minX = 3;
+                                        break;
+                                }
                                 //System.out.println(key.split(" ")[1]);
                                 //System.out.println(key.split(" ")[4]);
                                 DataPoint dataPoint = new DataPoint(timeOfYear, steps);
-                                series.appendData(dataPoint, true, 1000, true);
+                                series.appendData(dataPoint, true, 12, true);
                                 //String category = stat.get
                             }
                             GridLabelRenderer gridLabel = graph.getGridLabelRenderer();
                             gridLabel.setHorizontalAxisTitle(statOf + " of Year");
                             gridLabel.setVerticalAxisTitle("Steps");
+
                             graph.addSeries(series);
                             graph.getViewport().setScalable(true);
 
@@ -97,6 +118,12 @@ public class Stats extends AppCompatActivity {
 
 // activate vertical scrolling
                             graph.getViewport().setScrollableY(true);
+                            graph.getViewport().setXAxisBoundsManual(true);
+                            graph.getViewport().setYAxisBoundsManual(true);
+                            graph.getViewport().setMaxX(maxX);
+                            graph.getViewport().setMinX(minX);
+                            //graph.getViewport().setMaxY(maxY);
+                            graph.getViewport().setMinY(minY);
                             //JSONObject stats = response.getJSONObject("stepsByCategory");
                             //Log.i("Stats", "stats " + stats);
                             textView.setText("Response is: " + response);
